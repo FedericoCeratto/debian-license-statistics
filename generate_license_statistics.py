@@ -187,7 +187,7 @@ def guess_license(text):
         if sorted(guessed) == ['Artistic', 'GPL-2']:
             return 'Perl'
 
-        if True:  # debugging
+        if False:  # debugging
             log.info("---- multiple guesses: %s ----", guessed)
             log.info(text)
             log.info('-' * 33)
@@ -206,13 +206,14 @@ def guess_license(text):
             log.debug('-' * 33)
         return guessed.pop()
 
-    log.info("===== unknown license =====")
-    log.info(text)
-    log.info("=" * 33)
+    if False:  # debugging
+        log.info("===== unknown license =====")
+        log.info(text)
+        log.info("=" * 33)
     return 'unknown'
 
 
-def extract_license(text):
+def extract_license(pkg_name, text):
     """Extract license from debian/copyright if it is machine-parsable,
     otherwise perform hacky guesswork :(
     """
@@ -235,6 +236,11 @@ def extract_license(text):
     except debian.copyright.NotMachineReadableError:
         return 'guessed', guess_license(text)
 
+    except Exception as e:
+        # Unexpected exception from the copyright parser
+        log.error("Parsing the copyright of %s caused %r", pkg_name, e)
+        return 'guessed', guess_license(text)
+
 
 def detect_license(archive, name):
     path = "%s/%s/%s_copyright" % (name[0], name, archive)
@@ -242,7 +248,7 @@ def detect_license(archive, name):
     if text is None:
         raise PackageNotFound()  # package not existing
 
-    return extract_license(text)
+    return extract_license(name, text)
 
 
 def setup_plotting():
@@ -263,6 +269,7 @@ def write_out_summary(license_counters):
 def parse_args():
     ap = ArgumentParser()
     ap.add_argument('--max-packages', type=int, default=900)
+    ap.add_argument('--max-licenses', type=int, default=15)
     return ap.parse_args()
 
 def main():
@@ -286,31 +293,28 @@ def main():
             except PackageNotFound:
                 pass
 
-    for k in license_counters:
-        print k
-        print license_counters[k]
-
     write_out_summary(license_counters)
 
     setup_plotting()
     df = pd.DataFrame(license_counters)
-    df = df.sort(['unstable', 'stable'], ascending=[0, 0])
+    df.sort(['unstable', 'stable'], ascending=[0, 0], inplace=True)
+    df = df[:args.max_licenses]
     plot = df.plot(kind='bar', figsize=(20, 11))
-    return
     plot.get_figure().savefig('all.png')
 
     df['delta'] = df.unstable - df.oldstable
-    df = df.sort(['delta'], ascending=[0])
+    df.sort(['delta'], ascending=[0], inplace=True)
     del(df['stable'])
     del(df['unstable'])
     del(df['oldstable'])
     plot = df.plot(kind='bar', figsize=(20, 11))
     plot.get_figure().savefig('delta.png')
 
-    return df
-
 
 if __name__ == '__main__':
-    main()
-    print "Press Enter to exit"
-    raw_input()
+    try:
+        main()
+        print "Press Enter to exit"
+        raw_input()
+    finally:
+        logging.shutdown()
