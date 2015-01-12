@@ -84,6 +84,8 @@ known_licenses = {
     'GPL-2 and LGPL-2.1': 'LGPL-2',
     'GPL-2 and Other': 'GPL-2',
     'GPL-2.0': 'GPL-2',
+    'GPL-2+ with OpenSSL exemption': 'GPL-2',
+    'GPL-2+ with Autoconf exception': 'GPL-2',
     'GPL-3': 'GPL-3',
     'GPL-3.0': 'GPL-3',
     'GPL2': 'GPL-2',
@@ -92,6 +94,7 @@ known_licenses = {
     'LGPL': 'LGPL',
     'LGPL-2': 'LGPL-2',
     'LGPL-2.1': 'LGPL-2',
+    'LGPLv2.1': 'LGPL-2',
     'LGPL-3': 'LGPL-3',
     'MIT': 'MIT',
     'MPL-1.1': 'MPL-1.1',
@@ -166,7 +169,14 @@ def fetch_copyright(path):
     return None
 
 
-def guess_license(text):
+def simplify_license_name(license):
+    """Simplify license name. Differences between e.g. GPL-2 and GPL-2+ are
+    ignored.
+    """
+    license = license.rstrip('+')
+    return known_licenses.get(license, license)
+
+def guess_licenses(text):
     if text.startswith('<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">'):
         raise PackageNotFound # FIXME
 
@@ -174,9 +184,7 @@ def guess_license(text):
     for line in lines:
         if line.startswith('License: '):
             license = line.strip().split()[-1]
-            license = license.strip('+')
-            if license in known_licenses:
-                return known_licenses[license]
+            license = simplify_license_name(license)
 
     guessed = set([lic
                    for regex, lic in guessers
@@ -185,7 +193,7 @@ def guess_license(text):
     if len(guessed) > 1:
         # More than one license guessed!
         if sorted(guessed) == ['Artistic', 'GPL-2']:
-            return 'Perl'
+            return ['Perl']
 
         if False:  # debugging
             log.info("---- multiple guesses: %s ----", guessed)
@@ -196,7 +204,7 @@ def guess_license(text):
                 if s:
                     print "%s %s %s" % (lic, regex, s.group())
 
-        return 'multi'
+        return guessed
 
     elif guessed:
         # A license has been guessed
@@ -204,13 +212,13 @@ def guess_license(text):
             log.debug("---- guess: %s ----", license)
             log.debug(text)
             log.debug('-' * 33)
-        return guessed.pop()
+        return guessed
 
     if False:  # debugging
         log.info("===== unknown license =====")
         log.info(text)
         log.info("=" * 33)
-    return 'unknown'
+    return ['unknown']
 
 
 def extract_license(pkg_name, text):
@@ -219,30 +227,35 @@ def extract_license(pkg_name, text):
     """
     try:
         c = debian.copyright.Copyright(text)
-        for fp in c.all_files_paragraphs():
-            if fp.files == (u'*',):
-                if fp.license is None:
-                    return 'parsed', 'odd'
+        files_selectors = {fp.files[0]: fp.license.synopsis
+                           for fp in c.all_files_paragraphs()
+                           if fp.license}
 
-                license = fp.license.synopsis
-                license = license.rstrip('+')
-                if license in known_licenses:
-                    license = known_licenses[license]
+        # Always ignore the debian/* copyright: we care about the upstream
+        files_selectors.pop(u'debian/*', None)
 
-                return 'parsed', license
+        if not files_selectors:
+            return 'parsed', ['missing']
 
-        return 'parsed', 'missing'
+        if len(files_selectors) > 20:
+            # Too many licenses, it could be a package with many small files
+            # like gnulib and it could skew the statistics
+            return 'parsed', ['toomany']
+
+        licenses = [simplify_license_name(l)
+                    for l in files_selectors.itervalues()]
+        return 'parsed', licenses
 
     except debian.copyright.NotMachineReadableError:
-        return 'guessed', guess_license(text)
+        return 'guessed', guess_licenses(text)
 
     except Exception as e:
         # Unexpected exception from the copyright parser
         log.error("Parsing the copyright of %s caused %r", pkg_name, e)
-        return 'guessed', guess_license(text)
+        return 'guessed', guess_licenses(text)
 
 
-def detect_license(archive, name):
+def detect_licenses(archive, name):
     path = "%s/%s/%s_copyright" % (name[0], name, archive)
     text = fetch_copyright(path)
     if text is None:
@@ -288,10 +301,16 @@ def main():
     for archive in archive_names:
         for name in package_names:
             try:
-                origin, license = detect_license(archive, name)
-                license_counters[archive].update([license])
+                origin, licenses = detect_licenses(archive, name)
+                license_counters[archive].update(licenses)
+
             except PackageNotFound:
                 pass
+
+    for a in archive_names:
+        print a
+        for name, num in license_counters[a].most_common(30):
+            print "  %-60s %d" % (name, num)
 
     write_out_summary(license_counters)
 
