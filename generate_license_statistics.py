@@ -39,12 +39,11 @@ guessers = (
     ('Creative Commons Attribution-ShareAlike', 'CC'),
     ('/usr/share/common-licenses/BSD', 'BSD'),
     ('LaTeX Project Public License', 'LPPL'),
-    ('Permission is hereby granted, free of charge, to any person obtaining a copy', 'MIT'),
+    ('Permission is hereby granted, free of charge, \
+to any person obtaining a copy', 'MIT'),
     ('under the "Artistic" license', 'Artistic'),
     ('/usr/share/common-licenses/Apache-2.0', 'Apache-2.0'),
     ('/usr/share/common-licenses/BSD', 'BSD'),
-    #('the GNU Lesser General Public', 'LGPL-2'),
-    #('the GNU General Public License as', 'GPL-2'),
     ("""GNU General Public License as published by
 the Free Software Foundation; either version 2""", 'GPL-2'),
     ('may be used to endorse or promote products', 'BSD'),
@@ -116,13 +115,16 @@ cache = CacheManager(
     lock_dir=os.path.join(CACHE_DIR, 'lock'),
 )
 
+
 class PackageNotFound(Exception):
     pass
 
-def setup_logging():
-    log.setLevel(logging.DEBUG)
+
+def setup_logging(debug):
+    lvl = logging.DEBUG if debug else logging.INFO
+    log.setLevel(lvl)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    ch.setLevel(lvl)
     formatter = logging.Formatter('%(name)s %(levelname)s %(message)s')
     ch.setFormatter(formatter)
     log.addHandler(ch)
@@ -176,9 +178,10 @@ def simplify_license_name(license):
     license = license.rstrip('+')
     return known_licenses.get(license, license)
 
+
 def guess_licenses(text):
     if text.startswith('<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">'):
-        raise PackageNotFound # FIXME
+        raise PackageNotFound  # FIXME
 
     lines = text.splitlines()
     for line in lines:
@@ -196,9 +199,9 @@ def guess_licenses(text):
             return ['Perl']
 
         if False:  # debugging
-            log.info("---- multiple guesses: %s ----", guessed)
-            log.info(text)
-            log.info('-' * 33)
+            log.debug("---- multiple guesses: %s ----", guessed)
+            log.debug(text)
+            log.debug('-' * 33)
             for regex, lic in guessers:
                 s = re.search(regex, text)
                 if s:
@@ -215,13 +218,13 @@ def guess_licenses(text):
         return guessed
 
     if False:  # debugging
-        log.info("===== unknown license =====")
-        log.info(text)
-        log.info("=" * 33)
+        log.debug("===== unknown license =====")
+        log.debug(text)
+        log.debug("=" * 33)
     return ['unknown']
 
 
-def extract_license(pkg_name, text):
+def extract_licenses(pkg_name, text):
     """Extract license from debian/copyright if it is machine-parsable,
     otherwise perform hacky guesswork :(
     """
@@ -237,13 +240,9 @@ def extract_license(pkg_name, text):
         if not files_selectors:
             return 'parsed', ['missing']
 
-        if len(files_selectors) > 20:
-            # Too many licenses, it could be a package with many small files
-            # like gnulib and it could skew the statistics
-            return 'parsed', ['toomany']
+        licenses = set(simplify_license_name(l)
+                       for l in files_selectors.itervalues())
 
-        licenses = [simplify_license_name(l)
-                    for l in files_selectors.itervalues()]
         return 'parsed', licenses
 
     except debian.copyright.NotMachineReadableError:
@@ -261,7 +260,10 @@ def detect_licenses(archive, name):
     if text is None:
         raise PackageNotFound()  # package not existing
 
-    return extract_license(name, text)
+    origin, licenses = extract_licenses(name, text)
+    log.debug(">>>>>>>> %s: %s %r <<<<<<<<\n%s",
+              name, origin, licenses, text)
+    return origin, licenses
 
 
 def setup_plotting():
@@ -283,13 +285,15 @@ def parse_args():
     ap = ArgumentParser()
     ap.add_argument('--max-packages', type=int, default=900)
     ap.add_argument('--max-licenses', type=int, default=15)
+    ap.add_argument('-d', '--debug', action='store_true')
     return ap.parse_args()
 
+
 def main():
-    setup_logging()
     args = parse_args()
+    setup_logging(args.debug)
     archive_names = ['oldstable', 'stable', 'unstable']
-    license_counters = {a:Counter() for a in archive_names}
+    license_counters = {a: Counter() for a in archive_names}
 
     package_names = fetch_last_package_list()
 
@@ -319,9 +323,9 @@ def main():
     df.sort(['unstable', 'stable'], ascending=[0, 0], inplace=True)
     df = df[:args.max_licenses]
     plot = df.plot(kind='bar', figsize=(20, 11))
-    plot.get_figure().savefig('all.png')
+    plot.get_figure().savefig('all.png', transparent=True)
 
-    df['delta'] = df.unstable - df.oldstable
+    df['delta'] = (df.unstable - df.oldstable) / df.oldstable
     df.sort(['delta'], ascending=[0], inplace=True)
     del(df['stable'])
     del(df['unstable'])
